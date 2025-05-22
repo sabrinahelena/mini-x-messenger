@@ -1,4 +1,9 @@
-﻿#include "../include/message.hpp"
+﻿// server.cpp
+// Servidor central do mini-X Messenger
+// Gerencia conexões de clientes emissores e receptores, faz encaminhamento de mensagens
+// e envia mensagens periódicas de status para os receptores.
+
+#include "../include/message.hpp"
 #include <iostream>
 #include <vector>
 #include <winsock2.h> // Deve vir antes de windows.h
@@ -9,10 +14,12 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
+// Limites de clientes
 #define MAX_CLIENTS 20
 #define MAX_EXIBIDORES 10
 #define MAX_ENVIADORES 10
 
+// Arrays para armazenar sockets e IDs dos clientes conectados
 int client_sockets[MAX_CLIENTS];
 int client_ids[MAX_CLIENTS];
 int total_clients = 0;
@@ -25,19 +32,21 @@ int enviador_sockets[MAX_ENVIADORES];
 int enviador_ids[MAX_ENVIADORES];
 int total_enviadores = 0;
 
+// Variáveis para controle do timer periódico
 int periodic_flag = 0;
 time_t start_time;
 HANDLE hTimer = NULL;
 
-// Callback do timer do Windows
+// Função de callback chamada pelo timer do Windows a cada 60s
 VOID CALLBACK TimerRoutine(PVOID lpParam, BOOLEAN TimerOrWaitFired)
 {
-    periodic_flag = 1;
+    periodic_flag = 1; // Sinaliza que é hora de enviar mensagem de status
 }
 
+// Envia mensagem de status para todos os exibidores conectados
 void broadcast_info() {
     Message msg{};
-    msg.type = 2;
+    msg.type = 2; // MSG
     msg.orig_uid = 0;  // servidor
     msg.dest_uid = 0;
     time_t now = time(nullptr);
@@ -47,6 +56,7 @@ void broadcast_info() {
     msg.text_len = strlen(msg.text);
     char buffer[sizeof(Message)];
     msg.serialize(buffer);
+    // Envia para todos os exibidores ativos
     for (int i = 0; i < total_exibidores; ++i) {
         if (exibidor_sockets[i] != INVALID_SOCKET) {
             send(exibidor_sockets[i], buffer, sizeof(buffer), 0);
@@ -54,6 +64,7 @@ void broadcast_info() {
     }
 }
 
+// Inicializa o socket do servidor e faz bind na porta especificada
 void setup_server(int port, SOCKET& server_socket) {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -90,6 +101,7 @@ void setup_server(int port, SOCKET& server_socket) {
     std::cout << "Servidor iniciado na porta " << port << "\n";
 }
 
+// Loop principal: aceita conexões e processa mensagens dos clientes
 void accept_connections(SOCKET server_socket) {
     fd_set read_fds;
     char buffer[sizeof(Message)];
@@ -99,13 +111,15 @@ void accept_connections(SOCKET server_socket) {
         FD_ZERO(&read_fds);
         FD_SET(server_socket, &read_fds);
 
+        // Adiciona todos os clientes conectados ao conjunto de leitura
         for (int i = 0; i < total_clients; ++i) {
             if (client_sockets[i] != INVALID_SOCKET) {
                 FD_SET(client_sockets[i], &read_fds);
             }
         }
 
-        timeval timeout{0, 100000}; // 100ms timeout para checar periodic_flag
+        // Timeout curto para checar o flag do timer periodicamente
+        timeval timeout{0, 100000}; // 100ms
         int activity = select(0, &read_fds, nullptr, nullptr, &timeout);
 
         if (activity == SOCKET_ERROR) {
@@ -113,6 +127,7 @@ void accept_connections(SOCKET server_socket) {
             break;
         }
 
+        // Nova conexão de cliente
         if (FD_ISSET(server_socket, &read_fds)) {
             SOCKET new_socket = accept(server_socket, nullptr, nullptr);
             if (new_socket != INVALID_SOCKET && total_clients < MAX_CLIENTS) {
@@ -123,11 +138,13 @@ void accept_connections(SOCKET server_socket) {
             }
         }
 
+        // Processa mensagens de cada cliente conectado
         for (int i = 0; i < total_clients; ++i) {
             SOCKET sd = client_sockets[i];
             if (sd != INVALID_SOCKET && FD_ISSET(sd, &read_fds)) {
                 int bytes = recv(sd, buffer, sizeof(buffer), 0);
                 if (bytes <= 0) {
+                    // Cliente desconectou
                     closesocket(sd);
                     client_sockets[i] = INVALID_SOCKET;
                     client_ids[i] = -1;
@@ -136,6 +153,7 @@ void accept_connections(SOCKET server_socket) {
                     Message msg{};
                     msg.deserialize(buffer);
 
+                    // Processa mensagem de identificação (OI)
                     if (msg.type == 0) {  // OI
                         int id = msg.orig_uid;
                         bool erro = false;
@@ -159,6 +177,7 @@ void accept_connections(SOCKET server_socket) {
                             }
                         }
                         if (erro) {
+                            // Envia mensagem de erro e desconecta
                             Message errMsg{};
                             errMsg.type = 3; // ERRO
                             errMsg.orig_uid = 0;
@@ -173,6 +192,7 @@ void accept_connections(SOCKET server_socket) {
                             client_ids[i] = -1;
                             std::cout << "Cliente rejeitado (ID: " << id << ")\n";
                         } else {
+                            // Aceita cliente e registra tipo
                             client_ids[i] = id;
                             send(sd, buffer, sizeof(buffer), 0);
                             if (tipo == 1) {
@@ -187,20 +207,20 @@ void accept_connections(SOCKET server_socket) {
                             std::cout << "Cliente " << id << " identificado (tipo " << tipo << ")\n";
                         }
                     } else if (msg.type == 2) {  // MSG
-                        // Valida origem
+                        // Valida origem da mensagem
                         if (msg.orig_uid != client_ids[i]) {
                             std::cout << "MSG com orig_uid inválido de cliente " << client_ids[i] << "\n";
                             continue;
                         }
                         if (msg.dest_uid == 0) {
-                            // Envia para todos exibidores
+                            // Broadcast: envia para todos exibidores
                             for (int j = 0; j < total_exibidores; ++j) {
                                 if (exibidor_sockets[j] != INVALID_SOCKET) {
                                     send(exibidor_sockets[j], buffer, sizeof(buffer), 0);
                                 }
                             }
                         } else {
-                            // Envia só para exibidor de dest_uid
+                            // Unicast: envia só para exibidor de dest_uid
                             for (int j = 0; j < total_exibidores; ++j) {
                                 if (exibidor_ids[j] == msg.dest_uid && exibidor_sockets[j] != INVALID_SOCKET) {
                                     send(exibidor_sockets[j], buffer, sizeof(buffer), 0);
@@ -209,7 +229,7 @@ void accept_connections(SOCKET server_socket) {
                             }
                         }
                     } else if (msg.type == 1) {  // TCHAU
-                        // Remove dos arrays de exibidor/enviador
+                        // Remove cliente dos arrays de exibidor/enviador
                         int id = client_ids[i];
                         for (int k = 0; k < total_exibidores; ++k) {
                             if (exibidor_ids[k] == id) {
@@ -232,6 +252,7 @@ void accept_connections(SOCKET server_socket) {
             }
         }
 
+        // Se o timer disparou, envia mensagem de status
         if (periodic_flag) {
             broadcast_info();
             periodic_flag = 0;
@@ -239,6 +260,7 @@ void accept_connections(SOCKET server_socket) {
     }
 }
 
+// Libera recursos do servidor ao encerrar
 void cleanup() {
     if (hTimer) {
         DeleteTimerQueueTimer(NULL, hTimer, NULL);
@@ -255,6 +277,7 @@ int main(int argc, char* argv[]) {
     int port = atoi(argv[1]);
     SOCKET server_socket;
 
+    // Cria timer periódico para envio de mensagens de status
     if (!CreateTimerQueueTimer(&hTimer, NULL, TimerRoutine,
         NULL, 0, 60000, WT_EXECUTEDEFAULT)) {
         std::cerr << "Erro ao criar timer\n";
@@ -263,7 +286,7 @@ int main(int argc, char* argv[]) {
 
     setup_server(port, server_socket);
     
-    // Registra função de cleanup
+    // Registra função de cleanup para ser chamada ao sair
     std::atexit(cleanup);
 
     accept_connections(server_socket);
@@ -273,4 +296,3 @@ int main(int argc, char* argv[]) {
     
     return 0;
 }
-

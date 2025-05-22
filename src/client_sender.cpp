@@ -1,6 +1,6 @@
-﻿//
-// Created by sabrinaf on 21/05/2025.
-//
+﻿// client_sender.cpp
+// Cliente emissor do mini-X Messenger
+// Conecta ao servidor, se identifica e permite enviar mensagens para receptores específicos ou para todos (broadcast).
 
 #include "../include/message.hpp"
 #include <iostream>
@@ -9,28 +9,35 @@
 #pragma comment(lib, "ws2_32.lib")
 #include <cstring>
 
+// Função principal de conexão e envio de mensagens
 void connect_to_server(const char* ip, int port, int my_id) {
+    // Inicializa a biblioteca Winsock
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cerr << "Falha ao inicializar Winsock\n";
         return;
     }
+
+    // Cria o socket TCP
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("Socket error");
         return;
     }
 
+    // Preenche a estrutura de endereço do servidor
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
     inet_pton(AF_INET, ip, &server_addr.sin_addr);
 
+    // Tenta conectar ao servidor
     if (connect(sock, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("Connect error");
         return;
     }
 
+    // Prepara e envia mensagem de identificação (OI)
     Message msg{};
     msg.type = 0;  // OI
     msg.orig_uid = my_id;
@@ -42,16 +49,18 @@ void connect_to_server(const char* ip, int port, int my_id) {
     msg.serialize(buffer);
     send(sock, buffer, sizeof(buffer), 0);
 
-    // Aguarda resposta OI ou ERRO
+    // Aguarda resposta do servidor (OI ou ERRO)
     recv(sock, buffer, sizeof(buffer), 0);
     msg.deserialize(buffer);
 
     if (msg.type == 3) {
+        // Recebeu mensagem de erro do servidor
         std::cerr << "Erro do servidor: " << msg.text << "\n";
         closesocket(sock);
         return;
     }
     if (msg.type != 0) {
+        // Não recebeu confirmação de identificação
         std::cerr << "Erro: não recebeu OI do servidor.\n";
         closesocket(sock);
         return;
@@ -59,6 +68,7 @@ void connect_to_server(const char* ip, int port, int my_id) {
 
     std::cout << "Conectado ao servidor!\n";
 
+    // Loop principal para envio de mensagens
     while (true) {
         std::cout << "Destino (0 para todos, ou ID): ";
         std::cin >> msg.dest_uid;
@@ -90,4 +100,3 @@ int main(int argc, char* argv[]) {
     WSACleanup();
     return 0;
 }
-
